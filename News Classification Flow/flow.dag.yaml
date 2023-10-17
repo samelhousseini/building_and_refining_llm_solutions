@@ -1,0 +1,109 @@
+id: template_standard_flow
+name: Template Standard Flow
+inputs:
+  headline:
+    type: string
+    default: Puerto Ricans Desperate For Water After Hurricane Fiona’s Rampage
+    is_chat_input: false
+  short_description:
+    type: string
+    default: More than half a million people remained without water service three
+      days after the storm lashed the U.S. territory.
+    is_chat_input: false
+outputs:
+  class:
+    type: string
+    reference: ${post_processing.output}
+  class_bert:
+    type: string
+    reference: ${bert_fine_tuned.output}
+  class_llama:
+    type: string
+    reference: ${Llama2_py.output}
+nodes:
+- name: bert_fine_tuned
+  type: python
+  source:
+    type: code
+    path: bert_fine_tuned.py
+  inputs:
+    headline: ${inputs.headline}
+    short_description: ${inputs.short_description}
+  use_variants: false
+- name: AOAI_news_classifier
+  use_variants: true
+- name: examples
+  type: python
+  source:
+    type: code
+    path: examples.py
+  inputs: {}
+  use_variants: false
+- name: post_processing
+  type: python
+  source:
+    type: code
+    path: echo.py
+  inputs:
+    input: ${AOAI_news_classifier.output}
+  use_variants: false
+- name: Llama2_py
+  type: python
+  source:
+    type: code
+    path: Llama2_py.py
+  inputs:
+    headline: ${inputs.headline}
+    short_description: ${inputs.short_description}
+  use_variants: false
+node_variants:
+  AOAI_news_classifier:
+    default_variant_id: variant_1
+    variants:
+      variant_0:
+        node:
+          name: AOAI_news_classifier
+          type: llm
+          source:
+            type: code
+            path: joke.jinja2
+          inputs:
+            deployment_name: gpt-35-turbo-16k
+            temperature: 0.2
+            top_p: 1
+            stop: ""
+            max_tokens: 0
+            presence_penalty: 0
+            frequency_penalty: 0
+            logit_bias: ""
+            headline: ${inputs.headline}
+            short_description: ${inputs.short_description}
+          provider: AzureOpenAI
+          connection: aoi-ml-swnorth
+          api: chat
+          module: promptflow.tools.aoai
+      variant_1:
+        node:
+          name: AOAI_news_classifier
+          type: llm
+          source:
+            type: code
+            path: news_classifier__variant_1.jinja2
+          inputs:
+            deployment_name: gpt-35-turbo-16k
+            temperature: 0.2
+            top_p: 1
+            stop: ""
+            max_tokens: 0
+            presence_penalty: 0
+            frequency_penalty: 0
+            logit_bias: ""
+            examples: ${examples.output}
+            headline: ${inputs.headline}
+            short_description: ${inputs.short_description}
+          provider: AzureOpenAI
+          connection: aoi-ml-swnorth
+          api: chat
+          module: promptflow.tools.aoai
+environment:
+  python_requirements_txt: requirements.txt

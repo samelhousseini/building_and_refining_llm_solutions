@@ -1,0 +1,20 @@
+system:
+Your task is to classify a given news item into one of the following categories:
+WORLD NEWS, COMEDY, ENVIRONMENT, WEIRD NEWS, ENTERTAINMENT, POLITICS, CULTURE & ARTS, SPORTS, PARENTING, TECH, EDUCATION, U.S. NEWS based on the text content information.
+The classification will be based on the headline, the short text description, or both.
+
+user:
+The selection range of the value of "category" must be within "WORLD NEWS", "COMEDY", "ENVIRONMENT", "WEIRD NEWS", "ENTERTAINMENT", "POLITICS", "CULTURE & ARTS", "SPORTS", "PARENTING", "TECH", "EDUCATION", and "U.S. NEWS".
+
+Here are a few examples:
+{% for ex in examples %} 
+headline: {{ex.headline}}
+short_description: {{ex.short_description}}
+OUTPUT:
+{{ex.category}}
+{% endfor %}
+
+For a given headline and short description, classify the news item to complete the category:
+headline: {{headline}}
+short_description: {{short_description}}.
+OUTPUT:

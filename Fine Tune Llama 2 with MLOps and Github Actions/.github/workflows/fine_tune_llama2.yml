@@ -1,0 +1,130 @@
+name: Fine Tune LLama 2
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+
+env: 
+  GROUP: ${{secrets.GROUP}}
+  WORKSPACE: ${{secrets.WORKSPACE}}
+  SUBSCRIPTION: ${{secrets.SUBSCRIPTION}}
+
+  environment_name: news-env
+  environment_file: ./mlops/azureml/train/common/train-env.yml
+
+  training_target: gpu-cluster-ded-ND40
+  training_target_sku: STANDARD_ND40RS_V2
+  training_target_min_nodes: 0
+  training_target_max_nodes: 4
+  training_target_tier: lowpriority
+  registry_name: azureml
+  finetuning_pipeline_component: text_classification_pipeline
+  model_name: bert-base-uncased
+  model_version: 3
+  experiment_name: $(environment)_llmops_$(Build.SourceBranchName)
+  display_name: $(environment)_llmops_$(Build.BuildID)
+  
+  sentence1_key: short_description
+  sentence2_key: headline
+  label_key: category
+
+  deployment_sku: Standard_DS3_v2
+
+  run_id: run
+
+  llm_model: azureml://registries/azureml-meta/models/Llama-2-7b/versions/9
+  dataset: azureml:news-data@latest
+
+  data_file: ./mlops/azureml/train/common/data.yml
+  data_name: news-data
+  data_type: uri_file
+
+
+jobs:
+  fine-tune-llama-2:
+    runs-on: ubuntu-latest 
+    steps:
+
+    - name: check out repo
+      uses: actions/checkout@v2
+
+    - name: install az ml extension
+      run: az extension add -n ml -y
+
+    - name: azure login
+      uses: azure/login@v1
+      with:
+        creds: ${{secrets.AZURE_CREDENTIALS}}
+
+    - name: connect to workspace
+      run: az configure --defaults group=${{env.GROUP}} workspace=${{env.WORKSPACE}}
+
+    - name: create compute
+      run: |
+        compute_name=$(az ml compute show -n ${{ env.training_target }} --query name -o tsv)
+        if [[ -z "$compute_name" ]]
+        then
+          echo "Compute does not exists. Creating the cluster..."
+          az ml compute create --name ${{ env.training_target }} \
+                                  --type amlcompute \
+                                  --size ${{ env.training_target_sku }} \
+                                  --min-instances ${{ env.training_target_min_nodes }} \
+                                  --max-instances ${{ env.training_target_max_nodes }} \
+                                  --tier ${{ env.training_target_tier }} 
+        else
+          echo "Compute exists. Skipping cluster creation."
+          exit 0
+        fi
+
+    - name: register environment
+      run: |
+        az ml environment create --name ${{ env.environment_name }} --file ${{ env.environment_file }}
+
+    - name: register data
+      run: |
+        az ml data create --file ${{ env.data_file }} --name ${{ env.data_name }} --type ${{ env.data_type }}
+
+    - name: submit AML pipeline job
+      run: |
+        run_id=$(az ml job create --file ./mlops/azureml/train/llama2/llama2-news-classification-pipeline.yml --debug --query name -o tsv \
+            --set experiment_name="llmops-finetuning" \
+            inputs.subscriptionId=${{env.SUBSCRIPTION}} \
+            inputs.rg_group=${{env.GROUP}} \
+            inputs.workspace=${{env.WORKSPACE}} \
+            jobs.text_classification_pipeline.component="azureml://registries/azureml/components/text_classification_pipeline/labels/latest" \
+            inputs.compute_model_import=${{env.training_target}} \
+            inputs.compute_preprocess=${{env.training_target}} \
+            inputs.compute_finetune=${{env.training_target}} \
+            inputs.compute_model_evaluation=${{env.training_target}} \
+            inputs.mlflow_model_path.path=${{env.llm_model}}\
+            inputs.data_file_path.path=${{env.dataset}} \
+            inputs.evaluation_config_path.path="text-classification-config.json" \
+            inputs.sentence1_key=${{env.sentence1_key}}  \
+            inputs.sentence2_key=${{env.sentence2_key}}  \
+            inputs.label_key=${{env.label_key}} )
+
+        if [[ -z "$run_id" ]]
+        then
+          echo "Job creation failed"
+          exit 3
+        fi
+        az ml job show -n $run_id --web
+        status=$(az ml job show -n $run_id --query status -o tsv)
+        if [[ -z "$status" ]]
+        then
+          echo "Status query failed"
+          exit 4
+        fi
+        running=("NotStarted" "Queued" "Starting" "Preparing" "Running" "Finalizing" "CancelRequested")
+        while [[ ${running[*]} =~ $status ]]
+        do
+          sleep 15 
+          status=$(az ml job show -n $run_id --query status -o tsv)
+          echo $status
+        done
+        if [[ "$status" != "Completed" ]]  
+        then
+          echo "Training Job failed or canceled"
+          exit 3
+        fi            

@@ -1,0 +1,130 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+
+experiment_name: text-classification-emotion-detection
+
+inputs:
+  compute_model_import: gpu-cluster-big
+  compute_preprocess: gpu-cluster-big
+  compute_finetune: gpu-cluster-big
+  compute_model_evaluation: gpu-cluster-big
+
+  # specify the foundation model available in the azureml system registry
+  mlflow_model_path: 
+    path: azureml://registries/azureml/models/bert-based-uncased/versions/3
+    # huggingface_id: 'bert-base-uncased' # if you want to use a huggingface model, uncomment this line and comment the above line
+
+  # map the dataset files to parameters
+  data_file_path: 
+    type: uri_file
+    path: azureml:news-data@latest
+  evaluation_config_path:
+    type: uri_file
+    path: "./text-classification-config.json"
+  
+  
+  # The following parameters map to the dataset fields
+  sentence1_key: "text"
+  sentence2_key: "text"
+  label_key: "label_string"
+
+  # training settings
+  number_of_gpu_to_use_finetuning: 8
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  learning_rate: 2e-5
+  metric_for_best_model: f1_macro
+
+outputs:
+  # map the output of the fine tuning job to the output of pipeline job so that we can easily register the fine tuned model
+  # registering the model is required to deploy the model to an online or batch endpoint
+  trained_model:
+    type: mlflow_model
+
+
+  train_file_path: 
+    type: uri_file
+    path: azureml://datastores/workspaceblobstore/paths/prep_data/train.jsonl
+  validation_file_path:
+    type: uri_file
+    path: azureml://datastores/workspaceblobstore/paths/prep_data/val.jsonl
+  test_file_path:
+    type: uri_file
+    path: azureml://datastores/workspaceblobstore/paths/prep_data/test.jsonl
+
+
+
+settings:
+  force_rerun: true
+  default_datastore: azureml:workspaceblobstore
+  default_compute: azureml:cpu-cluster
+  continue_on_step_failure: false
+
+jobs:
+
+  prep_data:
+    name: prep_data
+    display_name: prep-data
+    code: ../../../../data-science/src/prep
+    command: >-
+      python prep.py
+      --raw_data ${{inputs.raw_data}}
+      --train_data ${{outputs.train_data}}
+      --val_data ${{outputs.val_data}}
+      --test_data ${{outputs.test_data}}
+    environment: azureml:news-env@latest
+    inputs:
+      raw_data: ${{parent.inputs.data_file_path}}
+    outputs:
+      train_data: 
+        path: azureml://datastores/workspaceblobstore/paths/prep_data/train.jsonl
+        type: uri_file
+        mode: rw_mount
+      val_data: 
+          path: azureml://datastores/workspaceblobstore/paths/prep_data/val.jsonl
+          type: uri_file
+          mode: rw_mount
+      test_data:
+          path: azureml://datastores/workspaceblobstore/paths/prep_data/test.jsonl
+          type: uri_file
+          mode: rw_mount
+
+  text_classification_pipeline:
+    type: pipeline
+    component: azureml://registries/azureml/components/text_classification_pipeline/labels/latest
+    inputs:
+      mlflow_model_path: ${{parent.inputs.mlflow_model_path}} 
+
+      compute_model_import: ${{parent.inputs.compute_model_import}}
+      compute_preprocess: ${{parent.inputs.compute_preprocess}}
+      compute_finetune: ${{parent.inputs.compute_finetune}}
+      compute_model_evaluation: ${{parent.inputs.compute_model_evaluation}}
+
+      train_file_path: ${{parent.jobs.prep_data.outputs.train_data}}
+      validation_file_path: ${{parent.jobs.prep_data.outputs.val_data}}
+      test_file_path: ${{parent.jobs.prep_data.outputs.test_data}}
+      evaluation_config: ${{parent.inputs.evaluation_config_path}}
+
+      sentence1_key: ${{parent.inputs.sentence1_key}}
+      sentence2_key: ${{parent.inputs.sentence2_key}}
+      label_key: ${{parent.inputs.label_key}}
+
+      number_of_gpu_to_use_finetuning: ${{parent.inputs.number_of_gpu_to_use_finetuning}}
+      num_train_epochs: ${{parent.inputs.num_train_epochs}}
+      per_device_train_batch_size: ${{parent.inputs.per_device_train_batch_size}}
+      per_device_eval_batch_size: ${{parent.inputs.per_device_eval_batch_size}}
+      learning_rate: ${{parent.inputs.learning_rate}}
+      metric_for_best_model: ${{parent.inputs.metric_for_best_model}}
+
+      apply_lora: true
+      merge_lora_weights: true
+      lora_alpha: 128
+      lora_r: 8
+      lora_dropout: 0.1
+      apply_ort: true
+      apply_deepspeed: true
+      apply_early_stopping: true
+
+    outputs:
+      mlflow_model_folder: ${{parent.outputs.trained_model}}
